@@ -554,8 +554,11 @@ async function apiSite(site, action, extra = {}) {
 
 /* Au déverrouillage, le même PIN ouvre chaque site distant. Un site qui
    refuse n'empêche pas les autres : on note l'échec et on continue. */
+const ECHECS = {};   // slug -> raison lisible du dernier echec
+
 async function ouvrirSitesDistants(pin) {
   for (const s of SITES.filter(x => x.fn)) {
+    delete ECHECS[s.slug];
     try {
       const etat = await fetch(s.fn, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -567,9 +570,16 @@ async function ouvrirSitesDistants(pin) {
         body: JSON.stringify({ action: etat.configure ? "login" : "setup", pin }),
       }).then(r => r.json());
 
-      if (d.ok && d.token) { JETONS[s.slug] = d.token; }
-      else console.warn("site refuse", s.slug, d.motif);
-    } catch (e) { console.warn("site injoignable", s.slug, e); }
+      if (d.ok && d.token) JETONS[s.slug] = d.token;
+      else ECHECS[s.slug] = d.motif || "code refuse";
+    } catch (e) {
+      /* Un echec ICI n'est presque jamais un mauvais code : le navigateur
+         a bloque l'appel avant le serveur, parce que l'adresse d'ou l'on
+         sert ce fichier n'est pas autorisee par la fonction du site.
+         Dire "code refuse" envoyait sur une fausse piste. */
+      ECHECS[s.slug] = "site injoignable — adresse non autorisée ou hors ligne";
+      console.warn("site injoignable", s.slug, e);
+    }
   }
   garderJetons();
 }
@@ -581,7 +591,7 @@ function feuilleSites() {
       <button class="moreit${s.slug === SITE ? " on" : ""}"
         onclick="choisirSite('${s.slug}')">
         ${s.nom}${s.slug === SITE ? " ·  actuel" : ""}
-        ${!s.natif && !JETONS[s.slug] ? "  —  code refusé" : ""}
+        ${!s.natif && !JETONS[s.slug] ? "  —  " + (ECHECS[s.slug] || "indisponible") : ""}
       </button>`).join("")}</div>`);
 }
 
@@ -595,7 +605,7 @@ async function choisirSite(slug) {
     renderShell(); go("dash"); return;
   }
 
-  if (!JETONS[slug]) { toast("Ce site a refusé le code. Reconnecte-toi."); return; }
+  if (!JETONS[slug]) { toast(ECHECS[slug] || "Site indisponible"); return; }
 
   // Décision de cadrage : la bascule est une navigation, pas une fusion
   // d'écrans. On arrive directement dans l'admin du client, connecté.
@@ -622,8 +632,8 @@ async function vSites() {
     }
     if (!JETONS[s.slug]) {
       cartes.push(`<div class="card sitecard">
-        <div class="sc-tete"><b>${esc(s.nom)}</b><span class="pill red">code refusé</span></div>
-        <div class="sc-note">Ce site n'a pas accepté le code.</div></div>`);
+        <div class="sc-tete"><b>${esc(s.nom)}</b><span class="pill red">non connecté</span></div>
+        <div class="sc-note">${esc(ECHECS[s.slug] || "Raison inconnue")}</div></div>`);
       continue;
     }
     const d = await apiSite(s, "resume");
